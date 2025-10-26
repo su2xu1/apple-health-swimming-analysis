@@ -19,9 +19,10 @@ class Config:
     """Class to manage configuration values"""
     
     # Date filtering settings
-    TARGET_YEAR: Optional[int] = None    # Specify year or None
-    TARGET_MONTH: Optional[int] = None   # Specify month or None  
-    TARGET_DAY: Optional[int] = None     # Specify day or None
+    TARGET_YEAR: Optional[int] = 2025    # Specify year or None
+    TARGET_MONTH: Optional[int] = 10   # Specify month or None  
+    TARGET_DAY: Optional[int] = 26     # Specify day or None
+
     
     # File paths
     EXPORT_XML_PATH = "./apple_health_export/export.xml"
@@ -244,6 +245,15 @@ def analyze_swim_sets(lap_df: pd.DataFrame) -> pd.DataFrame:
     """Analyze swim sets based on rest time"""
     print("\n# Executing set analysis based on rest time...")
     
+    # Check if DataFrame is empty
+    if lap_df.empty:
+        print("# No lap data found - returning empty set summary")
+        # Return empty DataFrame with expected columns
+        return pd.DataFrame(columns=[
+            'set_start_time', 'total_time_sec', 'avg_swolf', 
+            'stroke_combo', 'lap_count', 'distance_m', 'pace_sec_per_50m'
+        ])
+    
     # Sort by lap start time
     lap_df = lap_df.sort_values(by='lap_start').reset_index(drop=True)
     
@@ -287,8 +297,14 @@ def format_output_data(set_summary: pd.DataFrame) -> pd.DataFrame:
     """Format output data"""
     print("# Formatting data...")
     
+    # Check if DataFrame is empty
+    if set_summary.empty:
+        print("# No set data to format")
+        return set_summary
+    
     # Format time by removing timezone
-    set_summary['set_start_time'] = set_summary['set_start_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    if 'set_start_time' in set_summary.columns:
+        set_summary['set_start_time'] = set_summary['set_start_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
     
     # Floor numeric columns to 1 decimal place
     numeric_columns = ['total_time_sec', 'avg_swolf', 'pace_sec_per_50m']
@@ -330,11 +346,22 @@ def main():
         # Process swimming workouts
         swim_df = process_swim_workouts(raw_workouts)
         print(f"# Swimming workouts after filtering: {len(swim_df)}")
+        
+        if swim_df.empty:
+            print("# No swimming workouts found for the specified date range")
+            print("# Please check your date filtering settings or ensure you have swimming data")
+            return
+            
         print(swim_df)
         
         # Process lap data
         lap_df = process_lap_data(raw_workouts)
         print(f"# Total laps: {len(lap_df)}")
+        
+        if lap_df.empty:
+            print("# No lap data found for the specified date range")
+            print("# The analysis requires detailed lap-level data from Apple Watch")
+            return
         
         # Execute set analysis
         set_summary = analyze_swim_sets(lap_df)
