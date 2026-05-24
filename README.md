@@ -23,7 +23,7 @@ A Python tool to analyze swimming data from Apple Health export files, providing
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/yourusername/apple-health-swimming-analysis.git
+   git clone https://github.com/su2xu1/apple-health-swimming-analysis.git
    cd apple-health-swimming-analysis
    ```
 
