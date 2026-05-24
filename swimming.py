@@ -19,9 +19,9 @@ class Config:
     """Class to manage configuration values"""
     
     # Date filtering settings
-    TARGET_YEAR: Optional[int] = 2025    # Specify year or None
-    TARGET_MONTH: Optional[int] = 10   # Specify month or None  
-    TARGET_DAY: Optional[int] = 26     # Specify day or None
+    TARGET_YEAR: Optional[int] = 2026    # Specify year or None
+    TARGET_MONTH: Optional[int] = 5   # Specify month or None  
+    TARGET_DAY: Optional[int] = 24     # Specify day or None
 
     
     # File paths
@@ -241,7 +241,37 @@ def process_lap_data(raw_workouts: List[Dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame(lap_data)
 
 
-def analyze_swim_sets(lap_df: pd.DataFrame) -> pd.DataFrame:
+def process_heart_rate_records(raw_records: List[Dict[str, Any]]) -> pd.DataFrame:
+    """Extract heart-rate records from Apple Health Record data"""
+    print("# Processing heart-rate records...")
+
+    heart_rate_data = []
+
+    for record in raw_records:
+        if record.get('@type') != Constants.HEART_RATE_METRIC:
+            continue
+
+        timestamp = pd.to_datetime(record.get('@startDate'))
+        if not filter_by_date(timestamp):
+            continue
+
+        try:
+            bpm = float(record.get('@value'))
+        except (TypeError, ValueError):
+            continue
+
+        heart_rate_data.append({
+            'hr_time': timestamp,
+            'hr_bpm': bpm
+        })
+
+    if not heart_rate_data:
+        return pd.DataFrame(columns=['hr_time', 'hr_bpm'])
+
+    return pd.DataFrame(heart_rate_data).sort_values(by='hr_time').reset_index(drop=True)
+
+
+def analyze_swim_sets(lap_df: pd.DataFrame, hr_df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """Analyze swim sets based on rest time"""
     print("\n# Executing set analysis based on rest time...")
     
@@ -251,7 +281,8 @@ def analyze_swim_sets(lap_df: pd.DataFrame) -> pd.DataFrame:
         # Return empty DataFrame with expected columns
         return pd.DataFrame(columns=[
             'set_start_time', 'total_time_sec', 'avg_swolf', 
-            'stroke_combo', 'lap_count', 'distance_m', 'pace_sec_per_50m'
+            'stroke_combo', 'lap_count', 'distance_m', 'pace_sec_per_50m',
+            'avg_hr_bpm', 'max_hr_bpm', 'min_hr_bpm'
         ])
     
     # Sort by lap start time
@@ -289,6 +320,32 @@ def analyze_swim_sets(lap_df: pd.DataFrame) -> pd.DataFrame:
     set_summary['pace_sec_per_50m'] = (
         set_summary['total_time_sec'] / (set_summary['distance_m'] / Config.PACE_DISTANCE_M)
     )
+
+    # Estimate set end time and aggregate heart rate within each set period.
+    set_summary['set_end_time'] = set_summary['set_start_time'] + pd.to_timedelta(
+        set_summary['total_time_sec'], unit='s'
+    )
+
+    set_summary['avg_hr_bpm'] = float('nan')
+    set_summary['max_hr_bpm'] = float('nan')
+    set_summary['min_hr_bpm'] = float('nan')
+    if hr_df is not None and not hr_df.empty:
+        def summarize_set_hr(row: pd.Series) -> pd.Series:
+            set_hr = hr_df.loc[
+                (hr_df['hr_time'] >= row['set_start_time']) &
+                (hr_df['hr_time'] <= row['set_end_time']),
+                'hr_bpm'
+            ]
+            return pd.Series({
+                'avg_hr_bpm': set_hr.mean(),
+                'max_hr_bpm': set_hr.max(),
+                'min_hr_bpm': set_hr.min()
+            })
+
+        hr_summary = set_summary.apply(summarize_set_hr, axis=1)
+        set_summary[['avg_hr_bpm', 'max_hr_bpm', 'min_hr_bpm']] = hr_summary
+
+    set_summary = set_summary.drop(columns=['set_end_time'])
     
     return set_summary.reset_index(drop=True)
 
@@ -307,7 +364,10 @@ def format_output_data(set_summary: pd.DataFrame) -> pd.DataFrame:
         set_summary['set_start_time'] = set_summary['set_start_time'].dt.strftime('%Y-%m-%d %H:%M:%S')
     
     # Floor numeric columns to 1 decimal place
-    numeric_columns = ['total_time_sec', 'avg_swolf', 'pace_sec_per_50m']
+    numeric_columns = [
+        'total_time_sec', 'avg_swolf', 'pace_sec_per_50m',
+        'avg_hr_bpm', 'max_hr_bpm', 'min_hr_bpm'
+    ]
     for col in numeric_columns:
         if col in set_summary.columns:
             set_summary[col] = set_summary[col].apply(format_numeric_value)
@@ -341,6 +401,9 @@ def main():
         # Load XML data
         data = load_health_data(Config.EXPORT_XML_PATH)
         raw_workouts = data['HealthData']['Workout']
+        raw_records = data['HealthData'].get('Record', [])
+        if not isinstance(raw_records, list):
+            raw_records = [raw_records]
         print(f"# Total workouts: {len(raw_workouts)}")
         
         # Process swimming workouts
@@ -357,6 +420,10 @@ def main():
         # Process lap data
         lap_df = process_lap_data(raw_workouts)
         print(f"# Total laps: {len(lap_df)}")
+
+        # Process heart rate samples
+        hr_df = process_heart_rate_records(raw_records)
+        print(f"# Heart-rate samples after filtering: {len(hr_df)}")
         
         if lap_df.empty:
             print("# No lap data found for the specified date range")
@@ -364,7 +431,7 @@ def main():
             return
         
         # Execute set analysis
-        set_summary = analyze_swim_sets(lap_df)
+        set_summary = analyze_swim_sets(lap_df, hr_df)
         
         # Format data
         set_summary = format_output_data(set_summary)
